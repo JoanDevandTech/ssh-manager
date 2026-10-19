@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SSH Manager</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="h-screen w-screen flex flex-col bg-krom-black text-white font-sans selection:bg-krom-cyan selection:text-black overflow-hidden">
+    <header class="flex items-center gap-4 px-6 py-4 border-b border-krom-border shrink-0">
+      <svg class="w-7 h-7 shrink-0" viewBox="0 0 1024 1024" aria-hidden="true">
+        <rect width="1024" height="1024" rx="220" fill="#000" stroke="#1a1a1a" stroke-width="40" />
+        <path d="M300 380 L470 512 L300 644" fill="none" stroke="#4bcaec" stroke-width="72" stroke-linecap="round" stroke-linejoin="round" />
+        <rect x="520" y="608" width="220" height="72" rx="36" fill="#ed4054" />
+      </svg>
+      <input id="searchInput" type="text" autofocus spellcheck="false" placeholder="Search sessions, hosts, or users..."
+        class="w-full bg-transparent text-xl font-medium text-white border-none" />
+      <kbd id="kbdHint" class="text-xs text-krom-muted border border-krom-border px-2 py-1 rounded whitespace-nowrap font-sans">⌘K</kbd>
+      <button id="newBtn" class="text-xs text-krom-muted border border-krom-border px-2 py-1 rounded whitespace-nowrap hover:text-krom-cyan hover:border-krom-cyan transition">+ New</button>
+    </header>
+
+    <div class="flex-1 flex overflow-hidden">
+      <aside class="w-2/5 border-r border-krom-border flex flex-col">
+        <div id="sessionList" class="flex-1 overflow-y-auto py-2"></div>
+      </aside>
+      <main class="w-3/5 bg-krom-gray flex flex-col">
+        <div id="detailView" class="flex-1 p-8 overflow-y-auto flex flex-col"></div>
+      </main>
+    </div>
+
+    <div id="updateBar" class="hidden fixed bottom-0 inset-x-0 flex items-center gap-3 px-6 py-3 bg-krom-gray border-t border-krom-border text-sm z-40">
+      <span id="updateMsg" class="flex-1 text-neutral-300"></span>
+      <button id="updateLater" class="text-krom-muted hover:text-white transition">Later</button>
+      <button id="updateBtn" class="bg-krom-cyan text-black font-medium px-3 py-1 rounded hover:bg-white transition disabled:opacity-50">Update &amp; restart</button>
+    </div>
+
+    <div id="toast" class="fixed bottom-8 left-1/2 -translate-x-1/2 bg-white text-black px-4 py-2 rounded shadow-lg translate-y-20 opacity-0 transition-all duration-300 font-medium text-sm whitespace-nowrap z-50">
+      <span id="toast-message"></span>
+    </div>
+
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

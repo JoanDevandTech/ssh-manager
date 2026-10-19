@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SSH Manager",
+  "version": "0.1.0",
+  "identifier": "com.joandevandtech.sshmanager",
+  "build": {
+    "frontendDist": "../src",
+    "beforeDevCommand": { "script": "npm run css", "wait": true },
+    "beforeBuildCommand": "npm run css"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "SSH Manager",
+        "width": 960,
+        "height": 620,
+        "minWidth": 720,
+        "minHeight": 480,
+        "center": true
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkwRDI1NjYxRjExQjM1MDcKUldRSE5SdnhZVmJTa0JTdnB6Rkwrclh1eUtNUFBxVVVaT3dvQitwQXJQdHFqNzY0U0dMd2d6TDEK",
+      "endpoints": [
+        "https://github.com/JoanDevandTech/ssh-manager/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

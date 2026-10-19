@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v0.2.0)'
+        required: true
+      ref:
+        description: 'Branch or commit to build'
+        required: false
+        default: main
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+          - platform: windows-latest
+            args: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+
+      # App version comes from the tag; the repo keeps 0.1.0.
+      - name: Set version from tag
+        shell: bash
+        run: |
+          VERSION="${TAG#v}"
+          node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(f));c.version=process.argv[1];fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')" "$VERSION"
+          echo "version=$VERSION"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ env.TAG }}
+          releaseName: 'SSH Manager ${{ env.TAG }}'
+          releaseDraft: true
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}
+
+  # Publish only once every platform has uploaded, so latest.json is complete when the app sees it.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Publish release with generated notes
+        run: |
+          set -euo pipefail
+          NOTES="$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="$TAG" --jq .body)"
+          PRERELEASE=false
+          case "$TAG" in *-*) PRERELEASE=true ;; esac
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease="$PRERELEASE" --notes "$NOTES"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'
