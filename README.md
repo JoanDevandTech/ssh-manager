@@ -12,6 +12,7 @@ No passwords are ever stored: sessions point at a key file (or rely on your agen
   - macOS: Terminal, iTerm2, Warp, Alacritty\*, Ghostty\*
   - Windows: Windows Terminal, PowerShell, Command Prompt
 - Copy the `ssh` command to the clipboard
+- Browse button opens the file picker in `~/.ssh`
 - Sessions live in a plain JSON file you can edit, back up or sync yourself
 - Checks for new versions on launch and updates itself in one click (signed updates)
 
