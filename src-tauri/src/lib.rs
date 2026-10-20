@@ -48,6 +48,9 @@ fn decrypt_with(cipher: &Aes256Gcm, envelope: &str) -> Result<String, String> {
     let env: Envelope = serde_json::from_str(envelope).map_err(|e| e.to_string())?;
     let nonce = B64.decode(env.nonce).map_err(|e| e.to_string())?;
     let data = B64.decode(env.data).map_err(|e| e.to_string())?;
+    if nonce.len() != 12 {
+        return Err("Corrupted sessions file (bad nonce)".into());
+    }
     let plain = cipher
         .decrypt(Nonce::from_slice(&nonce), data.as_ref())
         .map_err(|_| "Could not decrypt sessions file (key mismatch or corrupted file)".to_string())?;
@@ -243,6 +246,9 @@ mod tests {
         assert!(!envelope.contains("10.0.0.1"));
         assert_eq!(decrypt_with(&cipher, &envelope).unwrap(), plain);
         assert!(is_plain_json(plain));
+
+        let short_nonce = envelope.replacen("\"nonce\":\"", "\"nonce\":\"AAAA", 1);
+        assert!(decrypt_with(&cipher, &short_nonce).is_err());
 
         let other = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&[8u8; 32]));
         assert!(decrypt_with(&other, &envelope).is_err());
