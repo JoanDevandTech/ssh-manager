@@ -1,11 +1,96 @@
+use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use tauri::Manager;
 
+const KEYRING_SERVICE: &str = "com.joandevandtech.sshmanager";
+const KEYRING_USER: &str = "sessions-key";
+
+#[derive(Serialize, Deserialize)]
+struct Envelope {
+    v: u8,
+    nonce: String,
+    data: String,
+}
+
+// Random 256-bit key, created once and kept in the OS keychain.
+fn cipher() -> Result<Aes256Gcm, String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
+    let key_b64 = match entry.get_password() {
+        Ok(k) => k,
+        Err(keyring::Error::NoEntry) => {
+            let k = B64.encode(Aes256Gcm::generate_key(OsRng));
+            entry.set_password(&k).map_err(|e| e.to_string())?;
+            k
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let bytes = B64.decode(key_b64).map_err(|e| e.to_string())?;
+    if bytes.len() != 32 {
+        return Err("Invalid sessions key in keychain".into());
+    }
+    Ok(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&bytes)))
+}
+
+fn encrypt_with(cipher: &Aes256Gcm, plain: &str) -> Result<String, String> {
+    let nonce = Aes256Gcm::generate_nonce(OsRng);
+    let data = cipher.encrypt(&nonce, plain.as_bytes()).map_err(|e| e.to_string())?;
+    serde_json::to_string(&Envelope { v: 1, nonce: B64.encode(nonce), data: B64.encode(data) })
+        .map_err(|e| e.to_string())
+}
+
+fn decrypt_with(cipher: &Aes256Gcm, envelope: &str) -> Result<String, String> {
+    let env: Envelope = serde_json::from_str(envelope).map_err(|e| e.to_string())?;
+    let nonce = B64.decode(env.nonce).map_err(|e| e.to_string())?;
+    let data = B64.decode(env.data).map_err(|e| e.to_string())?;
+    if nonce.len() != 12 {
+        return Err("Corrupted sessions file (bad nonce)".into());
+    }
+    let plain = cipher
+        .decrypt(Nonce::from_slice(&nonce), data.as_ref())
+        .map_err(|_| "Could not decrypt sessions file (key mismatch or corrupted file)".to_string())?;
+    String::from_utf8(plain).map_err(|e| e.to_string())
+}
+
+fn is_plain_json(raw: &str) -> bool {
+    raw.trim_start().starts_with('[')
+}
+
+// Atomic write, owner-only on unix.
+fn write_private(path: &Path, contents: &str) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    {
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp).map_err(|e| e.to_string())?;
+        f.write_all(contents.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+#[cfg(unix)]
+fn restrict(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode));
+}
+
+#[cfg(not(unix))]
+fn restrict(_path: &Path, _mode: u32) {}
+
 fn sessions_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    restrict(&dir, 0o700);
     Ok(dir.join("sessions.json"))
 }
 
@@ -15,15 +100,20 @@ fn load_sessions(app: tauri::AppHandle) -> Result<String, String> {
     if !path.exists() {
         return Ok("[]".into());
     }
-    fs::read_to_string(path).map_err(|e| e.to_string())
+    restrict(&path, 0o600);
+    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    if is_plain_json(&raw) {
+        // Pre-encryption file: encrypt it in place the first time it is read.
+        write_private(&path, &encrypt_with(&cipher()?, &raw)?)?;
+        return Ok(raw);
+    }
+    decrypt_with(&cipher()?, &raw)
 }
 
 #[tauri::command]
 fn save_sessions(app: tauri::AppHandle, data: String) -> Result<(), String> {
     let path = sessions_path(&app)?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, data).map_err(|e| e.to_string())?;
-    fs::rename(tmp, path).map_err(|e| e.to_string())
+    write_private(&path, &encrypt_with(&cipher()?, &data)?)
 }
 
 // ponytail: plain replace; enough for `-i ~/.ssh/key`
@@ -81,8 +171,15 @@ fn spawn(home: &Path, terminal: &str, title: &str, command: &str) -> Result<Exit
                 "---\nname: ssh-manager\nwindows:\n  - tabs:\n      - title: {title}\n        layout:\n          cwd: {home}\n          commands:\n            - exec: {command}\n",
                 home = home.display()
             );
-            fs::write(dir.join("ssh-manager.yaml"), yaml).map_err(|e| e.to_string())?;
-            Command::new("open").arg("warp://launch/ssh-manager").status()
+            let file = dir.join("ssh-manager.yaml");
+            write_private(&file, &yaml)?;
+            let status = Command::new("open").arg("warp://launch/ssh-manager").status();
+            // The config holds the ssh command: give Warp time to read it, then drop it.
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                let _ = fs::remove_file(file);
+            });
+            status
         }
         "alacritty" => Command::new("open")
             .args(["-na", "Alacritty", "--args", "-e", "/bin/zsh", "-lc", command])
@@ -138,5 +235,38 @@ mod tests {
         assert_eq!(expand_home("ssh -i ~/.ssh/k u@h", "C:\\Users\\me\\"), "ssh -i C:\\Users\\me/.ssh/k u@h");
         assert_eq!(safe_title("aws: prod \"gw\""), "aws prod gw");
         assert_eq!(safe_title("\"\""), "ssh");
+    }
+
+    #[test]
+    fn encrypts_and_decrypts_sessions() {
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&[7u8; 32]));
+        let plain = r#"[{"id":"1","name":"prod","host":"10.0.0.1"}]"#;
+        let envelope = encrypt_with(&cipher, plain).unwrap();
+        assert!(!is_plain_json(&envelope));
+        assert!(!envelope.contains("10.0.0.1"));
+        assert_eq!(decrypt_with(&cipher, &envelope).unwrap(), plain);
+        assert!(is_plain_json(plain));
+
+        let short_nonce = envelope.replacen("\"nonce\":\"", "\"nonce\":\"AAAA", 1);
+        assert!(decrypt_with(&cipher, &short_nonce).is_err());
+
+        let other = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&[8u8; 32]));
+        assert!(decrypt_with(&other, &envelope).is_err());
+
+        let tampered = envelope.replacen("\"data\":\"", "\"data\":\"AAAA", 1);
+        assert!(decrypt_with(&cipher, &tampered).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ssh-manager-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("sessions.json");
+        write_private(&file, "x").unwrap();
+        assert_eq!(fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "x");
+        let _ = fs::remove_dir_all(dir);
     }
 }
