@@ -45,7 +45,7 @@ Run the installer. SmartScreen may show "Windows protected your PC" because the 
   - Windows: Windows Terminal, PowerShell, Command Prompt
 - **Browse** button to pick the key file
 - Copy the `ssh` command to the clipboard
-- Sessions in a plain JSON file you can edit, back up or sync
+- Sessions encrypted at rest, key in the OS keychain
 - Signed in-app updates
 
 \* Untested on a real install; reports welcome.
@@ -73,7 +73,9 @@ Sessions are stored in:
 - macOS: `~/Library/Application Support/com.joandevandtech.sshmanager/sessions.json`
 - Windows: `%APPDATA%\com.joandevandtech.sshmanager\sessions.json`
 
-The file is plain JSON today:
+Since v0.1.2 the file is encrypted at rest with AES-256-GCM. The 256-bit key is generated on first use and kept in the OS keychain (macOS Keychain, Windows Credential Manager) under `com.joandevandtech.sshmanager` / `sessions-key`; the file and its folder are owner-only (`0600` / `0700`). A `sessions.json` written by an older version is encrypted automatically the first time the new version reads it; after that, an unencrypted file is refused.
+
+Decrypted, a session looks like this:
 
 ```json
 [
@@ -91,7 +93,11 @@ The file is plain JSON today:
 
 `terminal` ids: `terminal`, `iterm2`, `warp`, `alacritty`, `ghostty` (macOS) · `wt`, `powershell`, `cmd` (Windows).
 
-For Warp, the app writes a launch configuration to `~/.warp/launch_configurations/ssh-manager.yaml` with the `ssh` command of the last session opened in Warp.
+For Warp, the app writes a launch configuration to `~/.warp/launch_configurations/ssh-manager.yaml` with the `ssh` command of the session being opened; the file is owner-only and deleted about ten seconds after Warp is launched.
+
+### What this does and does not protect
+
+It protects the session list from other users and processes that cannot read your keychain, and from backups or sync tools copying the file in clear. It does not protect against code already running as your user, which can read the keychain and, more importantly, `~/.ssh`. For that, put a passphrase on your keys (`ssh-keygen -p -f ~/.ssh/<key>`) and keep full-disk encryption (FileVault / BitLocker) on. On macOS, because the app is ad-hoc signed, the keychain may ask to allow access again after an update.
 
 ## Development
 
