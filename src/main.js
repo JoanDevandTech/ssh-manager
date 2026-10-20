@@ -1,4 +1,4 @@
-import { buildCommand, filterSessions } from './lib.js';
+import { buildCommand, filterSessions, shortenHome } from './lib.js';
 
 const { invoke } = window.__TAURI__.core;
 const IS_WIN = navigator.userAgent.includes('Windows');
@@ -133,7 +133,13 @@ function renderForm() {
         ${input('user', 'User')}
         ${input('port', 'Port', 'type="number" min="1" max="65535"')}
       </div>
-      ${input('keyPath', 'Key Path', 'placeholder="~/.ssh/id_ed25519"')}
+      <div>
+        <label class="${LABEL}">Key Path</label>
+        <div class="flex gap-2">
+          <input name="keyPath" value="${esc(d.keyPath)}" placeholder="~/.ssh/id_ed25519" class="${FIELD} font-mono" />
+          <button type="button" data-action="browse" class="${BTN} whitespace-nowrap">Browse</button>
+        </div>
+      </div>
       <div>
         <label class="${LABEL}">Terminal</label>
         <select name="terminal" class="${FIELD} appearance-none cursor-pointer">${options}</select>
@@ -171,6 +177,24 @@ async function saveForm() {
   render();
   toast(`Saved ${d.name}`);
   searchInput.focus();
+}
+
+async function pickKey() {
+  if (!editing) return;
+  const { open } = window.__TAURI__.dialog;
+  const home = await window.__TAURI__.path.homeDir();
+  const sshDir = home.replace(/[\\/]+$/, '') + '/.ssh';
+  let sel;
+  try {
+    sel = await open({ title: 'Select private key', multiple: false, directory: false, defaultPath: sshDir });
+  } catch {
+    // defaultPath may not exist yet; retry without it
+    sel = await open({ title: 'Select private key', multiple: false, directory: false });
+  }
+  if (!sel) return;
+  editing.keyPath = shortenHome(sel, home);
+  const field = detailView.querySelector('[name=keyPath]');
+  if (field) field.value = editing.keyPath;
 }
 
 function cancelEdit() {
@@ -252,6 +276,7 @@ detailView.addEventListener('click', (e) => {
   else if (a === 'edit') startEdit(current());
   else if (a === 'delete') deleteCurrent(btn);
   else if (a === 'copy') copyCommand();
+  else if (a === 'browse') pickKey();
   else if (a === 'cancel') cancelEdit();
 });
 

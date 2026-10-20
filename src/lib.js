@@ -8,6 +8,13 @@ export function buildCommand(s) {
   return parts.join(' ');
 }
 
+// Rewrite a path under the home dir to ~/… (normalizes \ to /).
+export function shortenHome(path, home) {
+  const p = String(path).replace(/\\/g, '/');
+  const h = String(home).replace(/\\/g, '/').replace(/\/+$/, '');
+  return p === h || p.startsWith(h + '/') ? '~' + p.slice(h.length) : p;
+}
+
 export function filterSessions(sessions, query) {
   const q = String(query || '').trim().toLowerCase();
   if (!q) return [...sessions];
