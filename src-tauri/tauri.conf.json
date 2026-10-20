@@ -20,7 +20,7 @@
         "center": true
       }
     ],
-    "security": { "csp": null }
+    "security": { "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost" }
   },
   "bundle": {
     "active": true,
