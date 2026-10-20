@@ -1,35 +1,54 @@
 # SSH Manager
 
-A tiny command-palette style launcher for your SSH sessions. macOS and Windows.
+Command-palette style launcher for your SSH sessions on macOS and Windows: type, Enter, your terminal opens connected.
 
-Type to search, press **Enter**, and the terminal you chose opens with the right `ssh` command.
-No passwords are ever stored: sessions point at a key file (or rely on your agent / `~/.ssh/config`), and the terminal handles the rest.
+## Download
+
+Get the installer for your platform from the [latest release](https://github.com/JoanDevandTech/ssh-manager/releases/latest):
+
+| Platform | File |
+| --- | --- |
+| macOS, Apple Silicon (M1 or later) | `SSH.Manager_<version>_aarch64.dmg` |
+| macOS, Intel | `SSH.Manager_<version>_x64.dmg` |
+| Windows | `SSH.Manager_<version>_x64-setup.exe` (or `SSH.Manager_<version>_x64_en-US.msi`) |
+
+Ignore the `.app.tar.gz`, `.sig` and `latest.json` files: they are for the in-app updater.
+
+### macOS
+
+Open the `.dmg` and drag **SSH Manager** to Applications.
+
+The app is ad-hoc signed but not notarized, so macOS blocks the first launch. Right-click the app → **Open** (on macOS 15 or later: try to open it once, then **System Settings → Privacy & Security → Open Anyway**), or remove the quarantine flag, which also works when macOS says the app is damaged:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/SSH Manager.app"
+```
+
+On the first **Connect**, macOS asks to allow SSH Manager to control Terminal / iTerm2 (Automation): allow it. Because the signature is ad-hoc, it asks again after each update. Warp needs nothing (it is opened through a launch configuration).
+
+### Windows
+
+Run the installer. SmartScreen may show "Windows protected your PC" because the build is unsigned: **More info → Run anyway**. You need the OpenSSH client, which is built into Windows 10/11.
+
+## Use it in 30 seconds
+
+1. **+ New** (or `⌘N` / `Ctrl+N`) → fill in Name, Host (both required), User, Port, Key Path and Terminal → **Save**. **Browse** opens the file picker in `~/.ssh`; leave Key Path empty to use your default key, your agent or `~/.ssh/config`.
+2. Type to search, `↑` `↓` to pick, **Enter** (or **Connect Session**): the chosen terminal opens running `ssh -i <key> -p <port> user@host` (`-i` only with a key path, `-p` only for a port other than 22).
+3. **Copy** puts that command on the clipboard.
+4. **Edit** and **Delete** are in the detail panel on the right; its **Terminal** dropdown changes the terminal for that session.
 
 ## Features
 
-- Instant search over session name, host and user; arrow keys + Enter to connect
+- Instant search over name, host and user
 - Per-session terminal:
   - macOS: Terminal, iTerm2, Warp, Alacritty\*, Ghostty\*
   - Windows: Windows Terminal, PowerShell, Command Prompt
+- **Browse** button to pick the key file
 - Copy the `ssh` command to the clipboard
-- Browse button opens the file picker in `~/.ssh`
-- Sessions live in a plain JSON file you can edit, back up or sync yourself
-- Checks for new versions on launch and updates itself in one click (signed updates)
+- Sessions in a plain JSON file you can edit, back up or sync
+- Signed in-app updates
 
-\* not yet verified on a real install — reports welcome.
-
-## Install
-
-Grab the latest build from [Releases](../../releases).
-
-- **macOS**: builds are ad-hoc signed, not notarized. If macOS says the app is damaged, run once:
-  `xattr -dr com.apple.quarantine "/Applications/SSH Manager.app"`.
-  The first time you connect, macOS asks for permission to control Terminal / iTerm2 (Automation); because the signature is ad-hoc, it asks again after each update. Warp is driven through a launch configuration, no permission needed.
-- **Windows**: `.msi` or `.exe` installer. OpenSSH client must be installed (it is by default on Windows 10/11).
-
-## Updates
-
-On launch the app checks `releases/latest/download/latest.json` on this repository. When a newer version exists, a bar at the bottom offers **Update & restart**: the installer is downloaded, its minisign signature verified against the public key embedded in the app, and the app restarts. No telemetry, nothing else is sent.
+\* Untested on a real install; reports welcome.
 
 ## Shortcuts
 
@@ -41,28 +60,38 @@ On launch the app checks `releases/latest/download/latest.json` on this reposito
 | `⌘N` / `Ctrl+N` | New session |
 | `Esc` | Cancel edit |
 
-## Data
+## Updates
 
-Sessions are stored as JSON:
+On launch the app checks `releases/latest/download/latest.json` in this repository. When a newer version exists, a bar at the bottom offers **Update & restart**: the download is verified with its minisign signature against the public key embedded in the app, then installed, and the app restarts. No telemetry; nothing else is sent.
+
+## Data and security
+
+The app never stores passwords or private key contents. A session holds only its name, host, user, port, key path and terminal (plus a random id). Keys stay where they are (`~/.ssh`) and `ssh` itself reads them.
+
+Sessions are stored in:
 
 - macOS: `~/Library/Application Support/com.joandevandtech.sshmanager/sessions.json`
 - Windows: `%APPDATA%\com.joandevandtech.sshmanager\sessions.json`
+
+The file is plain JSON today:
 
 ```json
 [
   {
     "id": "7f1c...",
-    "name": "aws-prod-gateway",
-    "host": "54.210.12.89",
+    "name": "prod-gateway",
+    "host": "203.0.113.10",
     "user": "ubuntu",
     "port": 22,
-    "keyPath": "~/.ssh/krom_prod",
+    "keyPath": "~/.ssh/id_ed25519",
     "terminal": "iterm2"
   }
 ]
 ```
 
 `terminal` ids: `terminal`, `iterm2`, `warp`, `alacritty`, `ghostty` (macOS) · `wt`, `powershell`, `cmd` (Windows).
+
+For Warp, the app writes a launch configuration to `~/.warp/launch_configurations/ssh-manager.yaml` with the `ssh` command of the last session opened in Warp.
 
 ## Development
 
@@ -73,22 +102,24 @@ npm install
 npm run tauri dev     # runs the app
 npm test              # JS unit tests
 cargo test --manifest-path src-tauri/Cargo.toml
-npm run tauri build   # .dmg / .msi in src-tauri/target/release/bundle
+npm run tauri build   # .dmg / .msi / .exe in src-tauri/target/release/bundle
 ```
 
-Stack: Tauri 2, vanilla JS, Tailwind 4 (compiled by `npm run css`). No frontend bundler.
+`npm run tauri build` needs the updater signing key in the environment (`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`); `npm run tauri dev` does not.
 
-`npm run tauri build` needs the updater signing key in the environment (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`); `npm run tauri dev` does not.
+Stack: Tauri 2, vanilla JS, Tailwind 4 compiled by `npm run css` (`tauri dev` and `tauri build` run it first). No frontend bundler.
 
-### Releasing
+## Releasing
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-GitHub Actions (`release.yml`) builds macOS arm64 + x64 and Windows, sets the app version from the tag, signs the updater artifacts, uploads everything plus `latest.json` to a draft release and publishes it with generated notes once all three builds are in. The *Release* workflow can also be run by hand with a tag name. Tags must be `vX.Y.Z` (Windows installers need numeric versions).
+GitHub Actions (`release.yml`) builds macOS arm64 and x64 plus Windows, sets the app version from the tag, signs the updater artifacts, uploads everything (including `latest.json`) to a draft release, and publishes it with generated notes once all builds are in. The **Release** workflow can also be run by hand with a tag name (and, optionally, the branch or commit to build).
 
-Secrets required in the repository: `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (generated with `npm run tauri signer generate`). The public key lives in `src-tauri/tauri.conf.json`. Keep the private key safe: without it, installed apps cannot be updated.
+- Tags must be numeric `vX.Y.Z` (Windows installers need numeric versions).
+- Repository secrets: `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, generated with `npm run tauri signer generate`. The public key lives in `src-tauri/tauri.conf.json`.
+- Keep the private key safe: without it, installed apps cannot be updated.
 
 ## License
 
