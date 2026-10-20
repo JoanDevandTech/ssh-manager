@@ -19,14 +19,15 @@ struct Envelope {
 }
 
 // Random 256-bit key, created once and kept in the OS keychain.
-fn cipher() -> Result<Aes256Gcm, String> {
+// Also reports whether this call created it.
+fn cipher() -> Result<(Aes256Gcm, bool), String> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
-    let key_b64 = match entry.get_password() {
-        Ok(k) => k,
+    let (key_b64, created) = match entry.get_password() {
+        Ok(k) => (k, false),
         Err(keyring::Error::NoEntry) => {
             let k = B64.encode(Aes256Gcm::generate_key(OsRng));
             entry.set_password(&k).map_err(|e| e.to_string())?;
-            k
+            (k, true)
         }
         Err(e) => return Err(e.to_string()),
     };
@@ -34,7 +35,7 @@ fn cipher() -> Result<Aes256Gcm, String> {
     if bytes.len() != 32 {
         return Err("Invalid sessions key in keychain".into());
     }
-    Ok(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&bytes)))
+    Ok((Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&bytes)), created))
 }
 
 fn encrypt_with(cipher: &Aes256Gcm, plain: &str) -> Result<String, String> {
@@ -59,6 +60,16 @@ fn decrypt_with(cipher: &Aes256Gcm, envelope: &str) -> Result<String, String> {
 
 fn is_plain_json(raw: &str) -> bool {
     raw.trim_start().starts_with('[')
+}
+
+fn has_control_chars(s: &str) -> bool {
+    s.chars().any(char::is_control)
+}
+
+// YAML double-quoted scalar.
+#[cfg(any(target_os = "macos", test))]
+fn yaml_str(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 // Atomic write, owner-only on unix.
@@ -102,18 +113,23 @@ fn load_sessions(app: tauri::AppHandle) -> Result<String, String> {
     }
     restrict(&path, 0o600);
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let (cipher, key_created) = cipher()?;
     if is_plain_json(&raw) {
-        // Pre-encryption file: encrypt it in place the first time it is read.
-        write_private(&path, &encrypt_with(&cipher()?, &raw)?)?;
+        // Pre-encryption file: accepted only on the first run of an encrypting build.
+        if !key_created {
+            return Err("sessions.json is not encrypted but an encryption key already exists; refusing to load it. Restore a backup or delete the file.".into());
+        }
+        write_private(&path, &encrypt_with(&cipher, &raw)?)?;
         return Ok(raw);
     }
-    decrypt_with(&cipher()?, &raw)
+    decrypt_with(&cipher, &raw)
 }
 
 #[tauri::command]
 fn save_sessions(app: tauri::AppHandle, data: String) -> Result<(), String> {
     let path = sessions_path(&app)?;
-    write_private(&path, &encrypt_with(&cipher()?, &data)?)
+    let (cipher, _) = cipher()?;
+    write_private(&path, &encrypt_with(&cipher, &data)?)
 }
 
 // ponytail: plain replace; enough for `-i ~/.ssh/key`
@@ -132,6 +148,9 @@ fn safe_title(title: &str) -> String {
 
 #[tauri::command]
 fn open_terminal(app: tauri::AppHandle, terminal: String, title: String, command: String) -> Result<(), String> {
+    if has_control_chars(&command) || has_control_chars(&title) {
+        return Err("Session fields must not contain control characters".into());
+    }
     let home = app.path().home_dir().map_err(|e| e.to_string())?;
     let command = expand_home(&command, &home.to_string_lossy());
     let title = safe_title(&title);
@@ -168,8 +187,10 @@ fn spawn(home: &Path, terminal: &str, title: &str, command: &str) -> Result<Exit
             let dir = home.join(".warp/launch_configurations");
             fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let yaml = format!(
-                "---\nname: ssh-manager\nwindows:\n  - tabs:\n      - title: {title}\n        layout:\n          cwd: {home}\n          commands:\n            - exec: {command}\n",
-                home = home.display()
+                "---\nname: ssh-manager\nwindows:\n  - tabs:\n      - title: {ttl}\n        layout:\n          cwd: {cwd}\n          commands:\n            - exec: {exec}\n",
+                ttl = yaml_str(title),
+                cwd = yaml_str(&home.to_string_lossy()),
+                exec = yaml_str(command)
             );
             let file = dir.join("ssh-manager.yaml");
             write_private(&file, &yaml)?;
@@ -235,6 +256,10 @@ mod tests {
         assert_eq!(expand_home("ssh -i ~/.ssh/k u@h", "C:\\Users\\me\\"), "ssh -i C:\\Users\\me/.ssh/k u@h");
         assert_eq!(safe_title("aws: prod \"gw\""), "aws prod gw");
         assert_eq!(safe_title("\"\""), "ssh");
+        assert!(has_control_chars("ssh u@h\n"));
+        assert!(!has_control_chars("ssh -i \"/My Keys/k\" u@h"));
+        assert_eq!(yaml_str("a\"b\\c"), "\"a\\\"b\\\\c\"");
+        assert_eq!(yaml_str("- x"), "\"- x\"");
     }
 
     #[test]
